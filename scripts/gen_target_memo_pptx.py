@@ -3,11 +3,12 @@
 Generate a Target Memo PPTX using the Moat in the Machine template.
 Usage: python3 gen_target_memo_pptx.py data.json output.pptx [template.pptx]
 
-v3 -- 10-slide structure (Mar 2026).
+v4 -- 9-slide structure (Mar 2026).
 Slide order: Title, Snapshot, Napkin, Company Scores, Software Moat,
-             Data Moat & Platform, Competitive, GenAI, 100-Day Playbook, Sources.
-Handles optional JSON keys: playbook_100day_structured, partnership_dependency,
-pricing_model_risk, v2_delta.
+             Data Moat & Platform, Competitive, GenAI, Sources.
+Features: LayoutCursor anti-overlap system, proportional column widths,
+           top-aligned table cells, consistent header positioning.
+Handles optional JSON keys: partnership_dependency, pricing_model_risk, v2_delta.
 """
 import json, sys
 from pathlib import Path
@@ -16,6 +17,7 @@ from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import MSO_ANCHOR
 
 # ── Resolve skill directory for bundled template ──
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -51,8 +53,41 @@ LEFT_MARGIN  = 640080   # ~0.7"
 CONTENT_W    = 7863840  # ~8.6"
 FOOTER_Y     = 4828032
 FOOTER_H     = 274320
+CONTENT_BOTTOM = FOOTER_Y - 50000   # hard ceiling: nothing below this
+HEADER_TOP   = 274320   # consistent section header y-position
+CONTENT_TOP  = 620000   # content starts below header (header + gap)
 HALF_W       = 3749040  # half content width
 RIGHT_COL    = 4754880  # right column start
+
+
+class LayoutCursor:
+    """Sequential layout engine that guarantees no element overlaps the footer.
+    Usage:
+        lc = LayoutCursor(start_y=762000)
+        lc.place_table(slide, rows, ...)   # places table, advances cursor
+        lc.place_badges(slide, items, ...) # places badges in remaining space
+    All heights are clamped so nothing exceeds CONTENT_BOTTOM.
+    """
+    def __init__(self, start_y):
+        self.y = start_y
+
+    @property
+    def remaining(self):
+        return max(0, CONTENT_BOTTOM - self.y)
+
+    def advance(self, height, gap=0):
+        """Move cursor down by height + gap, clamped to CONTENT_BOTTOM."""
+        self.y = min(self.y + height + gap, CONTENT_BOTTOM)
+
+    def alloc(self, desired, min_h=200000):
+        """Allocate height: returns min(desired, remaining), floored at min_h."""
+        return max(min_h, min(desired, self.remaining))
+
+    def split(self, n_sections, gaps=80000):
+        """Split remaining space into n equal sections with gaps between."""
+        total_gaps = gaps * (n_sections - 1)
+        per = max(200000, (self.remaining - total_gaps) // n_sections)
+        return per
 
 
 def safe(text):
@@ -92,14 +127,16 @@ def _text(slide, left, top, width, height, text, size=12, bold=False,
     return txBox
 
 
-def _section_header(slide, text, top=244441):
+def _section_header(slide, text, top=None):
     """Red uppercase section header matching template style."""
-    _text(slide, LEFT_MARGIN, top, CONTENT_W, 330200,
+    if top is None:
+        top = HEADER_TOP
+    _text(slide, LEFT_MARGIN, top, CONTENT_W, 200000,
           text.upper(), size=13, bold=True, color=ACCENT_RED)
 
 
 def _subtitle(slide, text, top=533400):
-    _text(slide, LEFT_MARGIN, top, CONTENT_W, 461665,
+    _text(slide, LEFT_MARGIN, top, CONTENT_W, 200000,
           text, size=12, bold=False, color=GRAY)
 
 
@@ -164,20 +201,35 @@ def _score_badge(slide, left, top, label, value, max_val=5.0, color=None, with_c
           f"{value:.1f} / {max_val:.0f}", size=14, bold=True, color=color)
 
 
-def _table(slide, left, top, width, rows_data, size=8, row_height=None):
+def _table(slide, left, top, width, rows_data, size=8, row_height=None, col_ratios=None):
+    """Create a table. col_ratios: list of floats summing to ~1.0 for column widths."""
     n_rows = len(rows_data)
     n_cols = len(rows_data[0]) if rows_data else 1
     row_h = Emu(row_height) if row_height else Emu(228600)
     table_h = row_h * n_rows
     ts = slide.shapes.add_table(n_rows, n_cols, left, top, width, table_h)
     tbl = ts.table
+    # Apply column width ratios if provided
+    if col_ratios and len(col_ratios) == n_cols:
+        for c, ratio in enumerate(col_ratios):
+            tbl.columns[c].width = Emu(int(width * ratio))
     for r, row in enumerate(rows_data):
         for c, val in enumerate(row):
             cell = tbl.cell(r, c)
             cell.text = safe(str(val))
+            # Top-align text so it hugs top of cell (no floating)
+            cell.vertical_anchor = MSO_ANCHOR.TOP
+            cell.text_frame.word_wrap = True
+            # Tighten cell margins
+            cell.margin_top = Emu(36576)     # ~0.04"
+            cell.margin_bottom = Emu(18288)  # ~0.02"
+            cell.margin_left = Emu(45720)    # ~0.05"
+            cell.margin_right = Emu(45720)
             for para in cell.text_frame.paragraphs:
                 para.font.size = Pt(size)
                 para.font.name = FONT
+                para.space_before = Pt(0)
+                para.space_after = Pt(1)
                 if r == 0:
                     para.font.bold = True
                     para.font.color.rgb = WHITE
@@ -235,16 +287,17 @@ def build_title(prs, d, layout):
 def build_snapshot(prs, d, layout):
     """Slide 2: Company Snapshot & Investment Thesis on LIGHT layout."""
     slide = prs.slides.add_slide(layout)
-    _section_header(slide, "Company Snapshot & Investment Thesis", top=274320)
-    # KPI table (left) -- starts higher, taller rows
+    _section_header(slide, "Company Snapshot & Investment Thesis")
+    # KPI table (left)
     kpis = d.get("kpis", [])
     if kpis:
-        _table(slide, LEFT_MARGIN, 762000, HALF_W, kpis, size=8,
-               row_height=int(2971800 / max(len(kpis), 1)))
+        _table(slide, LEFT_MARGIN, CONTENT_TOP, HALF_W, kpis, size=8,
+               row_height=int(2971800 / max(len(kpis), 1)),
+               col_ratios=[0.40, 0.60])
     # Thesis (right)
-    _text(slide, RIGHT_COL, 762000, HALF_W, 274320,
+    _text(slide, RIGHT_COL, CONTENT_TOP, HALF_W, 180000,
           "INVESTMENT THESIS", size=10, bold=True, color=ACCENT_RED)
-    _text(slide, RIGHT_COL, 990600, HALF_W, 2667000,
+    _text(slide, RIGHT_COL, CONTENT_TOP + 200000, HALF_W, 2667000,
           d.get("thesis", ""), size=11, color=GRAY)
     # Score badges -- smaller height, tighter spacing
     scores = d.get("scores_summary", {})
@@ -280,7 +333,8 @@ def build_napkin(prs, d, layout):
     for q in napkin.get("questions", []):
         rows.append([q["label"], str(q["score"]), str(q["weight"]), q["rationale"]])
     _table(slide, LEFT_MARGIN, 1020465, CONTENT_W, rows, size=8,
-           row_height=int(2611120 / max(len(rows), 1)))
+           row_height=int(2611120 / max(len(rows), 1)),
+           col_ratios=[0.18, 0.07, 0.08, 0.67])
     # Evidence -- condensed, positioned after table
     evidence = napkin.get("evidence", [])
     if evidence:
@@ -295,31 +349,36 @@ def build_napkin(prs, d, layout):
 def build_company_scores(prs, d, layout):
     """Slide 4: Company-Level Subscores on LIGHT layout. No subtitle."""
     slide = prs.slides.add_slide(layout)
-    _section_header(slide, "Company-Level Subscores: Wind / Sail / Fit / AI Signal", top=307340)
-    # Table starts higher (no subtitle)
+    _section_header(slide, "Company-Level Subscores: Wind / Sail / Fit / AI Signal")
     subs = d.get("company_subscores", [])
     rows = [["Subscore", "Score", "Definition", "Evidence"]]
     for s in subs:
         rows.append([s["name"], str(s["score"]), s["definition"], s["evidence"]])
-    _table(slide, LEFT_MARGIN, 762000, CONTENT_W, rows, size=8,
-           row_height=int(3114040 / max(len(rows), 1)))
-    # Score text (no card backgrounds) -- aligned at bottom
-    y_label = 3952240
-    y_value = 4130040
+    # Layout cursor: reserve 420000 for score badges at bottom
+    SCORE_SECTION_H = 420000
+    lc = LayoutCursor(CONTENT_TOP)
+    table_h = lc.alloc(lc.remaining - SCORE_SECTION_H - 80000, min_h=1500000)
+    _table(slide, LEFT_MARGIN, lc.y, CONTENT_W, rows, size=8,
+           row_height=int(table_h / max(len(rows), 1)),
+           col_ratios=[0.10, 0.07, 0.30, 0.53])
+    lc.advance(table_h, gap=80000)
+    # Score badges positioned dynamically below table
+    y_label = lc.y
+    y_value = lc.y + 165000
     x = LEFT_MARGIN
     for s in subs:
         color = None
         if s["name"] == "Wind": color = GREEN if s["score"] >= 3.5 else AMBER
         elif s["name"] == "Sail": color = AMBER if s["score"] < 3.0 else BLUE
-        elif s["name"] == "AI Signal": color = GREEN if s["score"] < 3.0 else AMBER  # low is good
-        _text(slide, x, y_label, 1651000, 177800,
+        elif s["name"] == "AI Signal": color = GREEN if s["score"] < 3.0 else AMBER
+        _text(slide, x, y_label, 1651000, 152400,
               s["name"], size=10, bold=True, color=DARK_NAVY)
         if color is None:
             if s["score"] >= 4.0: color = GREEN
             elif s["score"] >= 3.0: color = BLUE
             elif s["score"] >= 2.0: color = AMBER
             else: color = RED
-        _text(slide, x, y_value, 1270000, 177800,
+        _text(slide, x, y_value, 1270000, 152400,
               f"{s['score']:.1f} / 5", size=14, bold=True, color=color)
         x += 1828800
     _add_footer(slide, d["company_name"], d.get("date", ""))
@@ -328,28 +387,32 @@ def build_company_scores(prs, d, layout):
 def build_software_moat(prs, d, layout):
     """Slide 5: Software Moat Assessment on LIGHT layout."""
     slide = prs.slides.add_slide(layout)
-    _section_header(slide, "Software Moat Assessment", top=127000)
-    # Tier as subtitle near top
+    _section_header(slide, "Software Moat Assessment")
     moat = d.get("software_moat", {})
     tier = moat.get("tier", "")
-    _text(slide, LEFT_MARGIN - 44402, 353367, CONTENT_W, 461665,
-          f"Software Moat Tier: {tier}", size=12, bold=False, color=DARK_NAVY)
-    # SC_Depth table
+    _subtitle(slide, f"Software Moat Tier: {tier}", top=480000)
     sc = moat.get("sc_depth", [])
+    badges = moat.get("composite_scores", {})
+    badge_items = list(badges.items())
+    # Layout cursor: reserve space for badges at bottom
+    BADGE_H = 370000
+    lc = LayoutCursor(CONTENT_TOP + 80000)
+    badge_reserve = BADGE_H + 80000 if badge_items else 0
+    table_h = lc.alloc(lc.remaining - badge_reserve, min_h=1500000)
     if sc:
         rows = [["Dimension", "Weight", "Score", "Rationale"]]
         for item in sc:
             rows.append([item["dimension"], item["weight"], str(item["score"]), item["rationale"]])
-        _table(slide, LEFT_MARGIN, 815032, CONTENT_W, rows, size=8,
-               row_height=int(3454400 / max(len(rows), 1)))
-    # Composite score badges at bottom with cards
-    badges = moat.get("composite_scores", {})
-    badge_items = list(badges.items())
-    x = LEFT_MARGIN - 44402
-    for i, (label, val) in enumerate(badge_items):
-        y = 4358232 + (i * 17048)  # slight stagger as in edited version
-        _score_badge(slide, x, y, label, val, with_card=True,
-                     card_w=1554480, card_h=483474)
+        _table(slide, LEFT_MARGIN, lc.y, CONTENT_W, rows, size=8,
+               row_height=int(table_h / max(len(rows), 1)),
+               col_ratios=[0.22, 0.08, 0.07, 0.63])
+    lc.advance(table_h, gap=80000)
+    # Badges: use remaining space, capped
+    badge_h = min(BADGE_H, lc.remaining)
+    x = LEFT_MARGIN
+    for label, val in badge_items:
+        _score_badge(slide, x, lc.y, label, val, with_card=True,
+                     card_w=1554480, card_h=badge_h)
         x += 1668120
     _add_footer(slide, d["company_name"], d.get("date", ""))
 
@@ -357,23 +420,22 @@ def build_software_moat(prs, d, layout):
 def build_data_moat(prs, d, layout):
     """Slide 6: Data Moat & Platform Analysis on LIGHT layout."""
     slide = prs.slides.add_slide(layout)
-    _section_header(slide, "Data Moat & Platform Analysis", top=274320)
+    _section_header(slide, "Data Moat & Platform Analysis")
     dm = d.get("data_moat", {})
-    content_top = 822960
     # Left column: Data moat
-    _text(slide, LEFT_MARGIN, content_top, HALF_W, 274320,
+    _text(slide, LEFT_MARGIN, CONTENT_TOP, HALF_W, 180000,
           "DATA MOAT CLASSIFICATION", size=10, bold=True, color=ACCENT_RED)
-    _bullets(slide, LEFT_MARGIN, content_top + 320040, HALF_W, 2236510,
+    _bullets(slide, LEFT_MARGIN, CONTENT_TOP + 200000, HALF_W, 2236510,
              dm.get("classification", []), size=9, color=GRAY)
     # Right column: Platform
-    _text(slide, RIGHT_COL, content_top - 5584, HALF_W, 274320,
+    _text(slide, RIGHT_COL, CONTENT_TOP, HALF_W, 180000,
           "PLATFORM / ECOSYSTEM", size=10, bold=True, color=ACCENT_RED)
-    _bullets(slide, RIGHT_COL, content_top + 341888, HALF_W, 1828800,
+    _bullets(slide, RIGHT_COL, CONTENT_TOP + 200000, HALF_W, 1828800,
              dm.get("platform", []), size=9, color=GRAY)
     # AI trajectory bottom
-    _text(slide, LEFT_MARGIN, 3383280, CONTENT_W, 274320,
+    _text(slide, LEFT_MARGIN, 3383280, CONTENT_W, 180000,
           "AI MOAT TRAJECTORY", size=10, bold=True, color=ACCENT_RED)
-    _bullets(slide, LEFT_MARGIN, 3520440, CONTENT_W, 1097280,
+    _bullets(slide, LEFT_MARGIN, 3383280 + 200000, CONTENT_W, 1097280,
              dm.get("ai_trajectory", []), size=9, color=GRAY)
     _add_footer(slide, d["company_name"], d.get("date", ""))
 
@@ -381,24 +443,30 @@ def build_data_moat(prs, d, layout):
 def build_competitive(prs, d, layout):
     """Slide 7: Competitive Landscape on LIGHT layout."""
     slide = prs.slides.add_slide(layout)
-    _section_header(slide, "Competitive Landscape", top=274320)
+    _section_header(slide, "Competitive Landscape")
     comp = d.get("competitive", {})
     rows = comp.get("table", [])
+    table_top = CONTENT_TOP
+    # Dynamic table height: give more space for many rows
+    n_rows = len(rows) if rows else 1
+    table_h = min(2500000, int(n_rows * 340000))  # ~340k per row, capped
     if rows:
-        _table(slide, LEFT_MARGIN, 762000, CONTENT_W, rows, size=7,
-               row_height=int(1828800 / max(len(rows), 1)))
+        _table(slide, LEFT_MARGIN, table_top, CONTENT_W, rows, size=8,
+               row_height=int(table_h / max(n_rows, 1)),
+               col_ratios=[0.14, 0.14, 0.16, 0.12, 0.44])
     notes = comp.get("notes", [])
     if notes:
-        table_bottom = 762000 + 1828800
-        y = table_bottom + 518160
-        _bullets(slide, LEFT_MARGIN, y, CONTENT_W, 1463040, notes, size=9, color=GRAY)
+        notes_top = table_top + table_h + 160000
+        notes_h = FOOTER_Y - notes_top - 40000  # fill remaining space
+        _bullets(slide, LEFT_MARGIN, notes_top, CONTENT_W, max(notes_h, 300000),
+                 notes, size=8, color=GRAY)
     _add_footer(slide, d["company_name"], d.get("date", ""))
 
 
 def build_genai(prs, d, layout):
     """Slide 8: GenAI Disruption Assessment on LIGHT layout."""
     slide = prs.slides.add_slide(layout)
-    _section_header(slide, "GenAI Disruption Assessment", top=274320)
+    _section_header(slide, "GenAI Disruption Assessment")
     genai = d.get("genai_risk", {})
     rows = genai.get("table", [])
     # Append partnership_dependency row if present
@@ -415,13 +483,26 @@ def build_genai(prs, d, layout):
                       f"{pmr.get('score', 'N/A')}/5",
                       pmr.get('model', ''),
                       f"Trend: {pmr.get('trend', 'N/A')}. AI impact: {pmr.get('ai_impact', 'N/A')}"])
-    if rows:
-        _table(slide, LEFT_MARGIN, 698500, CONTENT_W, rows, size=8,
-               row_height=int(2494280 / max(len(rows), 1)))
     bullets = genai.get("analysis", [])
+    # Layout cursor: split space between table and bullets
+    lc = LayoutCursor(CONTENT_TOP)
+    n_rows = len(rows) if rows else 0
+    if n_rows and bullets:
+        # 60% table, 40% bullets
+        table_h = lc.alloc(int(lc.remaining * 0.60), min_h=1200000)
+    elif n_rows:
+        table_h = lc.alloc(lc.remaining, min_h=1200000)
+    else:
+        table_h = 0
+    if rows:
+        _table(slide, LEFT_MARGIN, lc.y, CONTENT_W, rows, size=8,
+               row_height=int(table_h / max(n_rows, 1)),
+               col_ratios=[0.17, 0.08, 0.17, 0.58])
+        lc.advance(table_h, gap=120000)
     if bullets:
-        y = 698500 + 2494280 + 250800 if rows else 762000
-        _bullets(slide, LEFT_MARGIN, y, CONTENT_W, 1315745, bullets, size=9, color=GRAY)
+        bullets_h = lc.alloc(lc.remaining, min_h=300000)
+        _bullets(slide, LEFT_MARGIN, lc.y, CONTENT_W, bullets_h,
+                 bullets, size=8, color=GRAY)
     _add_footer(slide, d["company_name"], d.get("date", ""))
 
 
@@ -463,8 +544,8 @@ def build_100day(prs, d, layout):
 def build_sources(prs, d, layout):
     """Slide 10: Sources & Citations on LIGHT layout."""
     slide = prs.slides.add_slide(layout)
-    _section_header(slide, "Sources & Citations", top=274320)
-    _bullets(slide, LEFT_MARGIN, 762000, CONTENT_W, 3657600,
+    _section_header(slide, "Sources & Citations")
+    _bullets(slide, LEFT_MARGIN, CONTENT_TOP, CONTENT_W, CONTENT_BOTTOM - CONTENT_TOP,
              d.get("sources", []), size=7, color=LIGHT_GRAY)
     _add_footer(slide, d["company_name"], d.get("date", ""))
 
@@ -494,7 +575,7 @@ def generate(data_path, output_path, template_path=None):
     dark = layouts.get("DARK", prs.slide_layouts[min(1, len(prs.slide_layouts)-1)])
     light = layouts.get("LIGHT", prs.slide_layouts[min(2, len(prs.slide_layouts)-1)])
 
-    # 10-slide structure
+    # 9-slide structure
     build_title(prs, d, dark)
     build_snapshot(prs, d, light)
     build_napkin(prs, d, light)
@@ -503,7 +584,6 @@ def generate(data_path, output_path, template_path=None):
     build_data_moat(prs, d, light)
     build_competitive(prs, d, light)
     build_genai(prs, d, light)
-    build_100day(prs, d, light)
     build_sources(prs, d, light)
 
     prs.save(output_path)

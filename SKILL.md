@@ -1,6 +1,6 @@
 ---
 name: target-scoring
-description: Score PE/VC acquisition targets using the "Moat in the Machine" framework. Runs 4 parallel research agents, scores verticals (Napkin Q1/Q2/Q3), company subscores (Wind/Sail/Fit), software moats (SC_Depth, Data Moat, Platform), and generates a 10-slide investor memo PPTX. Use when evaluating software or services companies for acquisition or investment.
+description: Score PE/VC acquisition targets using the "Moat in the Machine" framework. Runs 4 parallel research agents, scores verticals (Napkin Q1/Q2/Q3), company subscores (Wind/Sail/Fit), software moats (SC_Depth, Data Moat, Platform), and generates a 9-slide investor memo PPTX. Use when evaluating software or services companies for acquisition or investment.
 ---
 
 # Target Scoring — Moat in the Machine
@@ -12,7 +12,7 @@ Score PE/VC acquisition targets using Dutchess Management's "Moat in the Machine
 1. **4 parallel research agents** gather financials, competitive landscape, GenAI risk, and tech moat data
 2. **Scoring rubric** classifies targets into quadrants: AI Goldmine, Contrarian Bet, Sand Castle, Rising Tide
 3. **JSON data file** captures all scores, evidence, and analysis
-4. **PPTX generator** produces a polished 10-slide investor memo
+4. **PPTX generator** produces a polished 9-slide investor memo (Title, Snapshot, Napkin, Company Scores, Software Moat, Data Moat, Competitive, GenAI, Sources)
 
 ## When to Use This Skill
 
@@ -262,7 +262,7 @@ python3 ~/.claude/skills/target-scoring/scripts/gen_target_memo_pptx.py \
 
 ### Step 6: Review & Present
 
-1. Confirm PPTX was generated successfully (check slide count = 10)
+1. Confirm PPTX was generated successfully (check slide count = 9)
 2. Present a summary to the user:
    - Quadrant classification + recommendation
    - Key scores: Wind, Sail, Fit, SC_Depth, Software_Moat
@@ -306,6 +306,31 @@ All v2 artifacts use `_v2_` infix. Produce a `v2_delta` JSON object documenting 
 - **Quadrant colors:** Green #2E7D32, Blue #1565C0, Red #C62828, Amber #F9A825
 - **Slide size:** 10" x 5.625" (9144000 x 5143500 EMU)
 - **Footer:** "Target Memo: {company} | Dutchess Management | {date} | Confidential"
+
+### Layout Engine
+
+The PPTX generator uses a `LayoutCursor` system that **guarantees no element overlaps the footer**:
+
+- `HEADER_TOP = 274320` — consistent section header y-position across all slides
+- `CONTENT_TOP = 620000` — content starts below header
+- `CONTENT_BOTTOM = FOOTER_Y - 50000` — hard ceiling, nothing placed below
+- Tables use `col_ratios` for proportional column widths (text-heavy columns get 44-67%)
+- All table cells use `MSO_ANCHOR.TOP` vertical alignment with word wrap
+- Minimum font size: 8pt for tables, 9pt for bullets
+
+### Slide Structure (9 slides)
+
+| # | Slide | Layout | Key Elements |
+|---|---|---|---|
+| 1 | Title | DARK | Company name, subtitle, quadrant badge, date |
+| 2 | Snapshot | LIGHT | KPI table (left), thesis (right), score badges, recommendation |
+| 3 | Napkin | LIGHT | Q1/Q2/Q3 scoring table, evidence bullets |
+| 4 | Company Scores | LIGHT | Wind/Sail/Fit/AI Signal table, score badges |
+| 5 | Software Moat | LIGHT | SC_Depth table, composite score badges |
+| 6 | Data Moat | LIGHT | Classification (left), platform (right), AI trajectory |
+| 7 | Competitive | LIGHT | Competitor table, analysis notes |
+| 8 | GenAI | LIGHT | Risk table, analysis bullets |
+| 9 | Sources | LIGHT | Citation list |
 
 ## References
 
