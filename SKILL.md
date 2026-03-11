@@ -162,7 +162,7 @@ Score 1-5 (inverted — 5 = highest risk) when single partnership >15% of revenu
 
 #### 3f. Pricing Model Vulnerability
 
-Score 1-5 (5 = most durable). If score <= 2: cap AI_Trajectory at 3, require pricing pivot scenario in 100-Day.
+Score 1-5 (5 = most durable). If score <= 2: cap AI_Trajectory at 3.
 
 | Score | Model | AI Resilience |
 |---|---|---|
@@ -225,12 +225,6 @@ Create a JSON file with all scores and evidence. Save to `research/<company>/<co
     "analysis": ["bullet1"]
   },
   "sources": ["source1", "source2"],
-  "playbook_100day": ["flat bullet array (backward compat)"],
-  "playbook_100day_structured": {
-    "phases": [
-      {"phase": 1, "name": "Financial Foundation", "days": "1-30", "items": [], "gate": "..."}
-    ]
-  }
 }
 ```
 
@@ -262,7 +256,7 @@ python3 ~/.claude/skills/target-scoring/scripts/gen_target_memo_pptx.py \
 
 ### Step 6: Review & Present
 
-1. Confirm PPTX was generated successfully (check slide count = 9)
+1. Confirm PPTX was generated successfully (check slide count = 10)
 2. Present a summary to the user:
    - Quadrant classification + recommendation
    - Key scores: Wind, Sail, Fit, SC_Depth, Software_Moat
@@ -287,17 +281,6 @@ V2 refinement principles:
 
 All v2 artifacts use `_v2_` infix. Produce a `v2_delta` JSON object documenting changes.
 
-## 100-Day Playbook Template
-
-| Phase | Days | Focus | Gate |
-|---|---|---|---|
-| 1. Financial Foundation | 1-30 | ARR validation, cohort retention, margin structure, cash flow | Financial Summary Memo |
-| 2. Customer & SC Validation | 15-45 | 10-15 reference calls, G2 analysis, integration audit, SC_Depth validation | SC Validation Report |
-| 3. Technology & AI | 30-60 | CTO interview, IP audit, AI capability, platform/ecosystem, security | Technology Assessment Memo |
-| 4. Competitive & Market | 45-75 | Independent market sizing, competitor deep-dive, win/loss, pricing vulnerability | Market & Competitive Memo |
-| 5. Financial Model | 60-90 | 3-scenario model, comps, sensitivity on SC_Depth erosion | IC Slide Deck |
-| 6. IC Memo | 75-100 | Full IC memo, updated PPTX, risk register, deal structure, Go/No-Go | Go/No-Go Decision |
-
 ## Design System
 
 - **Font:** Open Sauce One
@@ -318,7 +301,7 @@ The PPTX generator uses a `LayoutCursor` system that **guarantees no element ove
 - All table cells use `MSO_ANCHOR.TOP` vertical alignment with word wrap
 - Minimum font size: 8pt for tables, 9pt for bullets
 
-### Slide Structure (9 slides)
+### Slide Structure (10 slides)
 
 | # | Slide | Layout | Key Elements |
 |---|---|---|---|
@@ -329,8 +312,44 @@ The PPTX generator uses a `LayoutCursor` system that **guarantees no element ove
 | 5 | Software Moat | LIGHT | SC_Depth table, composite score badges |
 | 6 | Data Moat | LIGHT | Classification (left), platform (right), AI trajectory |
 | 7 | Competitive | LIGHT | Competitor table, analysis notes |
-| 8 | GenAI | LIGHT | Risk table, analysis bullets |
+| 8 | GenAI | LIGHT | Risk table, analysis bullets, partnership/pricing rows if present |
 | 9 | Sources | LIGHT | Citation list |
+
+### LayoutCursor API
+
+The `LayoutCursor` class manages vertical placement within a slide to prevent footer overlap.
+
+| Method | Purpose |
+|---|---|
+| `LayoutCursor(start_y)` | Initialize cursor at a y-position (EMU) |
+| `.remaining` | Space left before `CONTENT_BOTTOM` |
+| `.advance(height, gap=0)` | Move cursor down; clamped to `CONTENT_BOTTOM` |
+| `.alloc(desired, min_h=200000)` | Allocate `min(desired, remaining)`, floored at `min_h` |
+| `.split(n_sections, gaps=80000)` | Divide remaining space into `n` equal sections |
+
+Typical pattern: allocate table height, advance, then place badges in remaining space.
+
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| `ImportError: No module named 'pptx'` | `pip install python-pptx` |
+| `KeyError` on JSON field | Ensure JSON matches the schema in Step 4. The script uses `.get()` with defaults for all fields, but nested objects (napkin.questions, sc_depth items) should still include `label`, `score`, `weight`, `rationale` keys. |
+| Slide count is wrong | Expected: 9 slides. Check that all `build_*` functions are called in `generate()`. |
+| Competitive table misaligned | The `competitive.table` array can have 4 or 5 columns. The script auto-detects column count and adjusts `col_ratios`. |
+| Template not found | The script looks for `templates/moat_in_the_machine_v2.pptx` relative to the skill directory. Pass an explicit third argument to override. |
+| Unicode errors in PPTX | The `safe()` function converts common Unicode chars (em-dash, smart quotes, bullets) to ASCII equivalents. |
+
+## Bundled Files
+
+| Path | Description |
+|---|---|
+| `scripts/gen_target_memo_pptx.py` | PPTX generator (v5, 9-slide) |
+| `templates/moat_in_the_machine_v2.pptx` | Slide template with DARK/LIGHT layouts |
+| `references/scoring_playbook.md` | Full scoring methodology |
+| `references/software_moat_framework.md` | Software moat rubrics (SC_Depth, Data Moat, Platform) |
+| `index.js` | Stub entry point (not used by the skill pipeline) |
+| `package.json` | Package metadata |
 
 ## References
 

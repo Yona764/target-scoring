@@ -3,21 +3,26 @@
 Generate a Target Memo PPTX using the Moat in the Machine template.
 Usage: python3 gen_target_memo_pptx.py data.json output.pptx [template.pptx]
 
-v4 -- 9-slide structure (Mar 2026).
+v5 -- 9-slide structure (Mar 2026).
 Slide order: Title, Snapshot, Napkin, Company Scores, Software Moat,
              Data Moat & Platform, Competitive, GenAI, Sources.
 Features: LayoutCursor anti-overlap system, proportional column widths,
-           top-aligned table cells, consistent header positioning.
+           top-aligned table cells, consistent header positioning, safe .get() defaults.
 Handles optional JSON keys: partnership_dependency, pricing_model_risk, v2_delta.
 """
 import json, sys
 from pathlib import Path
-from pptx import Presentation
-from pptx.util import Inches, Pt, Emu
-from pptx.dml.color import RGBColor
-from pptx.enum.text import PP_ALIGN
-from pptx.enum.shapes import MSO_SHAPE
-from pptx.enum.text import MSO_ANCHOR
+
+try:
+    from pptx import Presentation
+    from pptx.util import Inches, Pt, Emu
+    from pptx.dml.color import RGBColor
+    from pptx.enum.text import PP_ALIGN
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.enum.text import MSO_ANCHOR
+except ImportError:
+    print("ERROR: python-pptx is required. Install with: pip install python-pptx")
+    sys.exit(1)
 
 # ── Resolve skill directory for bundled template ──
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -249,9 +254,10 @@ def _table(slide, left, top, width, rows_data, size=8, row_height=None, col_rati
 def build_title(prs, d, layout):
     """Slide 1: Title on DARK layout. Compact vertical positioning."""
     slide = prs.slides.add_slide(layout)
+    company = d.get("company_name", "Untitled Company")
     # Company name
     _text(slide, LEFT_MARGIN, 1397000, CONTENT_W, 825500,
-          safe(d["company_name"]), size=48, bold=True, color=WHITE)
+          safe(company), size=48, bold=True, color=WHITE)
     # Accent bar
     bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, LEFT_MARGIN, 2286000, 1097280, 45720)
     bar.fill.solid()
@@ -281,7 +287,7 @@ def build_title(prs, d, layout):
     # Date
     _text(slide, LEFT_MARGIN, 3746500, 4572000, 274320,
           d.get("date", ""), size=9, color=LIGHT_GRAY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_snapshot(prs, d, layout):
@@ -319,7 +325,7 @@ def build_snapshot(prs, d, layout):
           "RECOMMENDATION", size=10, bold=True, color=ACCENT_RED)
     _text(slide, LEFT_MARGIN, 4381500, CONTENT_W, 431800,
           d.get("recommendation", ""), size=8, bold=False, color=DARK_NAVY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_napkin(prs, d, layout):
@@ -331,7 +337,7 @@ def build_napkin(prs, d, layout):
     # Table with taller rows
     rows = [["Question", "Score", "Weight", "Rationale"]]
     for q in napkin.get("questions", []):
-        rows.append([q["label"], str(q["score"]), str(q["weight"]), q["rationale"]])
+        rows.append([q.get("label", ""), str(q.get("score", "")), str(q.get("weight", "")), q.get("rationale", "")])
     _table(slide, LEFT_MARGIN, 1020465, CONTENT_W, rows, size=8,
            row_height=int(2611120 / max(len(rows), 1)),
            col_ratios=[0.18, 0.07, 0.08, 0.67])
@@ -343,7 +349,7 @@ def build_napkin(prs, d, layout):
               "KEY EVIDENCE", size=10, bold=True, color=ACCENT_RED)
         _bullets(slide, LEFT_MARGIN, ev_top + 304798, CONTENT_W, 559127,
                  evidence, size=9, color=GRAY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_company_scores(prs, d, layout):
@@ -353,7 +359,7 @@ def build_company_scores(prs, d, layout):
     subs = d.get("company_subscores", [])
     rows = [["Subscore", "Score", "Definition", "Evidence"]]
     for s in subs:
-        rows.append([s["name"], str(s["score"]), s["definition"], s["evidence"]])
+        rows.append([s.get("name", ""), str(s.get("score", "")), s.get("definition", ""), s.get("evidence", "")])
     # Layout cursor: reserve 420000 for score badges at bottom
     SCORE_SECTION_H = 420000
     lc = LayoutCursor(CONTENT_TOP)
@@ -367,21 +373,23 @@ def build_company_scores(prs, d, layout):
     y_value = lc.y + 165000
     x = LEFT_MARGIN
     for s in subs:
+        name = s.get("name", "")
+        score = float(s.get("score", 0))
         color = None
-        if s["name"] == "Wind": color = GREEN if s["score"] >= 3.5 else AMBER
-        elif s["name"] == "Sail": color = AMBER if s["score"] < 3.0 else BLUE
-        elif s["name"] == "AI Signal": color = GREEN if s["score"] < 3.0 else AMBER
+        if name == "Wind": color = GREEN if score >= 3.5 else AMBER
+        elif name == "Sail": color = AMBER if score < 3.0 else BLUE
+        elif name == "AI Signal": color = GREEN if score < 3.0 else AMBER
         _text(slide, x, y_label, 1651000, 152400,
-              s["name"], size=10, bold=True, color=DARK_NAVY)
+              name, size=10, bold=True, color=DARK_NAVY)
         if color is None:
-            if s["score"] >= 4.0: color = GREEN
-            elif s["score"] >= 3.0: color = BLUE
-            elif s["score"] >= 2.0: color = AMBER
+            if score >= 4.0: color = GREEN
+            elif score >= 3.0: color = BLUE
+            elif score >= 2.0: color = AMBER
             else: color = RED
         _text(slide, x, y_value, 1270000, 152400,
-              f"{s['score']:.1f} / 5", size=14, bold=True, color=color)
+              f"{score:.1f} / 5", size=14, bold=True, color=color)
         x += 1828800
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_software_moat(prs, d, layout):
@@ -402,7 +410,7 @@ def build_software_moat(prs, d, layout):
     if sc:
         rows = [["Dimension", "Weight", "Score", "Rationale"]]
         for item in sc:
-            rows.append([item["dimension"], item["weight"], str(item["score"]), item["rationale"]])
+            rows.append([item.get("dimension", ""), item.get("weight", ""), str(item.get("score", "")), item.get("rationale", "")])
         _table(slide, LEFT_MARGIN, lc.y, CONTENT_W, rows, size=8,
                row_height=int(table_h / max(len(rows), 1)),
                col_ratios=[0.22, 0.08, 0.07, 0.63])
@@ -414,7 +422,7 @@ def build_software_moat(prs, d, layout):
         _score_badge(slide, x, lc.y, label, val, with_card=True,
                      card_w=1554480, card_h=badge_h)
         x += 1668120
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_data_moat(prs, d, layout):
@@ -437,7 +445,7 @@ def build_data_moat(prs, d, layout):
           "AI MOAT TRAJECTORY", size=10, bold=True, color=ACCENT_RED)
     _bullets(slide, LEFT_MARGIN, 3383280 + 200000, CONTENT_W, 1097280,
              dm.get("ai_trajectory", []), size=9, color=GRAY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_competitive(prs, d, layout):
@@ -451,16 +459,23 @@ def build_competitive(prs, d, layout):
     n_rows = len(rows) if rows else 1
     table_h = min(2500000, int(n_rows * 340000))  # ~340k per row, capped
     if rows:
+        n_cols = len(rows[0]) if rows else 1
+        if n_cols == 5:
+            ratios = [0.14, 0.14, 0.16, 0.12, 0.44]
+        elif n_cols == 4:
+            ratios = [0.18, 0.18, 0.20, 0.44]
+        else:
+            ratios = [1.0 / n_cols] * n_cols
         _table(slide, LEFT_MARGIN, table_top, CONTENT_W, rows, size=8,
                row_height=int(table_h / max(n_rows, 1)),
-               col_ratios=[0.14, 0.14, 0.16, 0.12, 0.44])
+               col_ratios=ratios)
     notes = comp.get("notes", [])
     if notes:
         notes_top = table_top + table_h + 160000
         notes_h = FOOTER_Y - notes_top - 40000  # fill remaining space
         _bullets(slide, LEFT_MARGIN, notes_top, CONTENT_W, max(notes_h, 300000),
                  notes, size=8, color=GRAY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_genai(prs, d, layout):
@@ -503,7 +518,7 @@ def build_genai(prs, d, layout):
         bullets_h = lc.alloc(lc.remaining, min_h=300000)
         _bullets(slide, LEFT_MARGIN, lc.y, CONTENT_W, bullets_h,
                  bullets, size=8, color=GRAY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_100day(prs, d, layout):
@@ -538,16 +553,16 @@ def build_100day(prs, d, layout):
             _text(slide, LEFT_MARGIN, 762000, CONTENT_W, 457200,
                   "100-Day Playbook to be developed during diligence.",
                   size=11, color=GRAY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def build_sources(prs, d, layout):
-    """Slide 10: Sources & Citations on LIGHT layout."""
+    """Slide 10 (final): Sources & Citations on LIGHT layout."""
     slide = prs.slides.add_slide(layout)
     _section_header(slide, "Sources & Citations")
     _bullets(slide, LEFT_MARGIN, CONTENT_TOP, CONTENT_W, CONTENT_BOTTOM - CONTENT_TOP,
              d.get("sources", []), size=7, color=LIGHT_GRAY)
-    _add_footer(slide, d["company_name"], d.get("date", ""))
+    _add_footer(slide, d.get("company_name", "Untitled Company"), d.get("date", ""))
 
 
 def generate(data_path, output_path, template_path=None):
@@ -575,7 +590,7 @@ def generate(data_path, output_path, template_path=None):
     dark = layouts.get("DARK", prs.slide_layouts[min(1, len(prs.slide_layouts)-1)])
     light = layouts.get("LIGHT", prs.slide_layouts[min(2, len(prs.slide_layouts)-1)])
 
-    # 9-slide structure
+    # 10-slide structure
     build_title(prs, d, dark)
     build_snapshot(prs, d, light)
     build_napkin(prs, d, light)
